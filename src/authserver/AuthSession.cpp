@@ -284,3 +284,52 @@ void AuthSession::HandlePacket(
         }
     }
 }
+void AuthSession::HandleLogonChallenge(
+    const std::vector<uint8_t>& body)
+{
+    if (body.size() < CHALLENGE_BODY_MIN_SIZE ||
+        body.size() > CHALLENGE_BODY_MIN_SIZE + MAX_USERNAME_SIZE)
+    {
+        Close();
+        return;
+    }
+
+    // La estructura completa del challenge se analizará
+    // en el siguiente paso, incluyendo el nombre de cuenta.
+    std::cout << "[AuthSession] LOGON_CHALLENGE recibido. "
+              << "Bytes: " << body.size() << '\n';
+
+    // No enviar todavía una respuesta SRP incompleta.
+    // Mantener la conexión abierta para la siguiente etapa.
+    state_ = State::WaitingProof;
+}
+
+void AuthSession::HandleLogonProof(
+    const std::vector<uint8_t>& body)
+{
+    if (body.size() != LOGON_PROOF_BASE_SIZE)
+    {
+        Close();
+        return;
+    }
+
+    std::cout << "[AuthSession] LOGON_PROOF recibido. "
+              << "Bytes: " << body.size() << '\n';
+
+    // Aquí irá la verificación SRP6.
+}
+
+void AuthSession::HandleRealmList(
+    const std::vector<uint8_t>& body)
+{
+    if (body.size() != REALM_LIST_BODY_SIZE)
+    {
+        Close();
+        return;
+    }
+
+    std::cout << "[AuthSession] REALM_LIST recibido. "
+              << "Bytes: " << body.size() << '\n';
+
+    // Aquí irá la respuesta con la lista de reinos.
+}
