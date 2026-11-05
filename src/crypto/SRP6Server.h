@@ -37,6 +37,7 @@ public:
 
     const Key& GetB() const;
     const Key& GetSalt() const;
+    const SessionKey& GetSessionKey() const;
 
     bool IsReady() const;
     bool IsAuthenticated() const;
@@ -48,10 +49,11 @@ private:
 
     Key publicB_{};
     Key salt_{};
-
-    std::string username_;
+    Key verifier_{};
 
     SessionKey sessionKey_{};
+
+    std::string username_;
 
     bool ready_ = false;
     bool authenticated_ = false;
