@@ -34,6 +34,7 @@ endif()
 add_executable(AuthServer
     src/main/auth_main.cpp
     src/authserver/AuthServer.cpp
+    src/authserver/LogonChallenge.cpp
 )
 
 target_link_libraries(AuthServer PRIVATE core)
