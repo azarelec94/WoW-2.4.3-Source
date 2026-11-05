@@ -1,6 +1,7 @@
 #pragma once
 
 #include <boost/asio.hpp>
+#include "LogonChallenge.h"
 
 #include <array>
 #include <cstdint>
