@@ -6,10 +6,10 @@
 namespace AuthOpcode
 {
     constexpr uint8_t LOGON_CHALLENGE = 0x00;
-    constexpr uint8_t LOGON_PROOF     = 0x01;
+    constexpr uint8_t LOGON_PROOF = 0x01;
     constexpr uint8_t RECONNECT_CHALLENGE = 0x02;
     constexpr uint8_t RECONNECT_PROOF = 0x03;
-    constexpr uint8_t REALM_LIST      = 0x10;
+    constexpr uint8_t REALM_LIST = 0x10;
 }
 
 namespace AuthStatus
