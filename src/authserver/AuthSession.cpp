@@ -287,21 +287,60 @@ void AuthSession::HandlePacket(
 void AuthSession::HandleLogonChallenge(
     const std::vector<uint8_t>& body)
 {
-    if (body.size() < CHALLENGE_BODY_MIN_SIZE ||
-        body.size() > CHALLENGE_BODY_MIN_SIZE + MAX_USERNAME_SIZE)
+    LogonChallenge challenge;
+    std::string error;
+
+    if (!LogonChallengeParser::Parse(body, challenge, error))
     {
+        std::cerr
+            << "[AuthSession] Challenge rechazado: "
+            << error
+            << '\n';
+
         Close();
         return;
     }
 
-    // La estructura completa del challenge se analizará
-    // en el siguiente paso, incluyendo el nombre de cuenta.
-    std::cout << "[AuthSession] LOGON_CHALLENGE recibido. "
-              << "Bytes: " << body.size() << '\n';
+    // Este emulador apunta específicamente a WoW TBC 2.4.3.
+    if (challenge.versionMajor != 2 ||
+        challenge.versionMinor != 4 ||
+        challenge.versionPatch != 3 ||
+        challenge.build != 8606)
+    {
+        std::cerr
+            << "[AuthSession] Cliente no compatible. Version: "
+            << static_cast<unsigned int>(challenge.versionMajor)
+            << '.'
+            << static_cast<unsigned int>(challenge.versionMinor)
+            << '.'
+            << static_cast<unsigned int>(challenge.versionPatch)
+            << " Build: "
+            << challenge.build
+            << '\n';
 
-    // No enviar todavía una respuesta SRP incompleta.
-    // Mantener la conexión abierta para la siguiente etapa.
+        Close();
+        return;
+    }
+
+    username_ = challenge.username;
+    clientBuild_ = challenge.build;
+
+    std::cout
+        << "[AuthSession] LOGON_CHALLENGE valido\n"
+        << "  Cuenta: " << username_ << '\n'
+        << "  Version: "
+        << static_cast<unsigned int>(challenge.versionMajor)
+        << '.'
+        << static_cast<unsigned int>(challenge.versionMinor)
+        << '.'
+        << static_cast<unsigned int>(challenge.versionPatch)
+        << '\n'
+        << "  Build: " << clientBuild_ << '\n';
+
     state_ = State::WaitingProof;
+
+    // Todavía falta responder al cliente con el challenge SRP6.
+    // No se debe aceptar LOGON_PROOF hasta completar esa respuesta.
 }
 
 void AuthSession::HandleLogonProof(
