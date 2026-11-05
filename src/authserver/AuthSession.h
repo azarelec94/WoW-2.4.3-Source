@@ -5,6 +5,7 @@
 #include <memory>
 #include <vector>
 #include <string>
+#include <array>
 #include <cstdint>
 
 class AuthSession :
@@ -13,8 +14,7 @@ class AuthSession :
 public:
     using Socket = boost::asio::ip::tcp::socket;
 
-    explicit AuthSession(
-        std::shared_ptr<Socket> socket);
+    explicit AuthSession(std::shared_ptr<Socket> socket);
 
     void Start();
     void Close();
@@ -30,8 +30,9 @@ private:
         Closed
     };
 
-    void ReadHeader();
-    void ReadBody(uint16_t size);
+    void ReadOpcode();
+    void ReadChallengeHeader();
+    void ReadPayload(size_t size);
 
     void HandlePacket(
         uint8_t opcode,
@@ -47,11 +48,15 @@ private:
         const std::vector<uint8_t>& body);
 
     std::shared_ptr<Socket> socket_;
+
     State state_ = State::Connected;
 
-    std::array<uint8_t, 4> header_{};
+    uint8_t opcode_ = 0;
+    std::array<uint8_t, 3> challengeHeader_{};
+
     std::vector<uint8_t> body_;
 
     std::string username_;
     uint16_t clientBuild_ = 0;
 };
+
