@@ -1,0 +1,60 @@
+
+CREATE DATABASE IF NOT EXISTS wow_auth
+CHARACTER SET utf8mb4
+COLLATE utf8mb4_unicode_ci;
+
+USE wow_auth;
+
+CREATE TABLE accounts
+(
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    username VARCHAR(32) NOT NULL,
+    salt BINARY(32) NOT NULL,
+    verifier BINARY(32) NOT NULL,
+
+    gm_level TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    expansion TINYINT UNSIGNED NOT NULL DEFAULT 1,
+
+    locked BOOLEAN NOT NULL DEFAULT FALSE,
+    online BOOLEAN NOT NULL DEFAULT FALSE,
+
+    last_ip VARCHAR(45) DEFAULT NULL,
+    last_login DATETIME DEFAULT NULL,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_username (username)
+);
+
+CREATE TABLE realms
+(
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    name VARCHAR(64) NOT NULL,
+    address VARCHAR(255) NOT NULL,
+    port SMALLINT UNSIGNED NOT NULL DEFAULT 8085,
+
+    icon TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    flags TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    timezone TINYINT UNSIGNED NOT NULL DEFAULT 1,
+
+    population FLOAT NOT NULL DEFAULT 0,
+
+    PRIMARY KEY (id)
+);
+
+CREATE TABLE account_sessions
+(
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    account_id BIGINT UNSIGNED NOT NULL,
+    session_key BINARY(40) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_account (account_id),
+
+    CONSTRAINT fk_session_account
+        FOREIGN KEY (account_id)
+        REFERENCES accounts(id)
+        ON DELETE CASCADE
+);
