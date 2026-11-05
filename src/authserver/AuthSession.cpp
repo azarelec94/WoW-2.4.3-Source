@@ -1,24 +1,50 @@
-
 #include "AuthSession.h"
 
-#include "../protocol/AuthOpcodes.h"
-#include "../protocol/AuthPacket.h"
+#include "protocol/AuthOpcodes.h"
 
-#include <iostream>
+#include <boost/asio/read.hpp>
+
 #include <algorithm>
 #include <array>
-#include <cctype>
+#include <iostream>
+#include <limits>
 
-AuthSession::AuthSession(
-    std::shared_ptr<Socket> socket)
+namespace
+{
+    constexpr std::size_t CHALLENGE_HEADER_SIZE = 3;
+
+    constexpr std::size_t CHALLENGE_BODY_MIN_SIZE = 30;
+    constexpr std::size_t MAX_USERNAME_SIZE = 16;
+
+    // LOGON_PROOF:
+    // A[32] + M1[20] + CRC[20] + numberOfKeys[1] + securityFlags[1]
+    constexpr std::size_t LOGON_PROOF_BASE_SIZE = 74;
+
+    // REALM_LIST request: 4-byte build/version field.
+    constexpr std::size_t REALM_LIST_BODY_SIZE = 4;
+
+    uint16_t ReadUInt16LE(const uint8_t* data)
+    {
+        return static_cast<uint16_t>(
+            static_cast<uint16_t>(data[0]) |
+            (static_cast<uint16_t>(data[1]) << 8)
+        );
+    }
+}
+
+AuthSession::AuthSession(std::shared_ptr<Socket> socket)
     : socket_(std::move(socket))
 {
 }
 
 void AuthSession::Start()
 {
+    if (!socket_ || !socket_->is_open())
+        return;
+
     state_ = State::WaitingChallenge;
-    ReadHeader();
+
+    ReadOpcode();
 }
 
 void AuthSession::Close()
@@ -27,6 +53,9 @@ void AuthSession::Close()
         return;
 
     state_ = State::Closed;
+
+    if (!socket_)
+        return;
 
     boost::system::error_code error;
 
@@ -38,7 +67,7 @@ void AuthSession::Close()
     socket_->close(error);
 }
 
-void AuthSession::ReadHeader()
+void AuthSession::ReadOpcode()
 {
     if (state_ == State::Closed)
         return;
@@ -47,68 +76,176 @@ void AuthSession::ReadHeader()
 
     boost::asio::async_read(
         *socket_,
-        boost::asio::buffer(header_),
+        boost::asio::buffer(&opcode_, sizeof(opcode_)),
+
         [self](const boost::system::error_code& error,
-               std::size_t)
+               std::size_t bytesTransferred)
         {
-            if (error)
+            if (error || bytesTransferred != 1)
             {
                 self->Close();
                 return;
             }
 
-            const uint8_t opcode = self->header_[0];
-
-            const uint16_t size =
-                static_cast<uint16_t>(self->header_[2]) |
-                (static_cast<uint16_t>(
-                    self->header_[3]) << 8);
-
-            // Prevent oversized authentication packets.
-            if (size > 4096)
+            switch (self->opcode_)
             {
-                self->Close();
-                return;
-            }
+                case AuthOpcode::LOGON_CHALLENGE:
+                {
+                    self->ReadChallengeHeader();
+                    break;
+                }
 
-            self->ReadBody(size);
+                case AuthOpcode::LOGON_PROOF:
+                {
+                    self->ReadPayload(LOGON_PROOF_BASE_SIZE);
+                    break;
+                }
+
+                case AuthOpcode::REALM_LIST:
+                {
+                    self->ReadPayload(REALM_LIST_BODY_SIZE);
+                    break;
+                }
+
+                case AuthOpcode::RECONNECT_CHALLENGE:
+                {
+                    // Todavía no implementado.
+                    self->Close();
+                    break;
+                }
+
+                case AuthOpcode::RECONNECT_PROOF:
+                {
+                    // Todavía no implementado.
+                    self->Close();
+                    break;
+                }
+
+                default:
+                {
+                    std::cerr
+                        << "[AuthSession] Opcode desconocido: "
+                        << static_cast<unsigned int>(self->opcode_)
+                        << '\n';
+
+                    self->Close();
+                    break;
+                }
+            }
         }
     );
 }
 
-void AuthSession::ReadBody(uint16_t size)
+void AuthSession::ReadChallengeHeader()
 {
+    if (state_ == State::Closed)
+        return;
+
+    auto self = shared_from_this();
+
+    boost::asio::async_read(
+        *socket_,
+        boost::asio::buffer(
+            challengeHeader_.data(),
+            CHALLENGE_HEADER_SIZE
+        ),
+
+        [self](const boost::system::error_code& error,
+               std::size_t bytesTransferred)
+        {
+            if (error || bytesTransferred != CHALLENGE_HEADER_SIZE)
+            {
+                self->Close();
+                return;
+            }
+
+            self->protocolVersion_ = self->challengeHeader_[0];
+
+            const uint16_t bodySize = ReadUInt16LE(
+                self->challengeHeader_.data() + 1
+            );
+
+            // Para el cliente 2.4.3 esperamos protocol version 8.
+            if (self->protocolVersion_ != 8)
+            {
+                std::cerr
+                    << "[AuthSession] Version de protocolo no soportada: "
+                    << static_cast<unsigned int>(
+                        self->protocolVersion_
+                    )
+                    << '\n';
+
+                self->Close();
+                return;
+            }
+
+            if (!self->IsValidChallengeSize(bodySize))
+            {
+                std::cerr
+                    << "[AuthSession] Tamano invalido de challenge: "
+                    << bodySize
+                    << '\n';
+
+                self->Close();
+                return;
+            }
+
+            self->ReadPayload(bodySize);
+        }
+    );
+}
+
+bool AuthSession::IsValidChallengeSize(std::size_t size) const
+{
+    const std::size_t maximumSize =
+        CHALLENGE_BODY_MIN_SIZE + MAX_USERNAME_SIZE;
+
+    return size >= CHALLENGE_BODY_MIN_SIZE &&
+           size <= maximumSize;
+}
+
+void AuthSession::ReadPayload(std::size_t size)
+{
+    if (state_ == State::Closed)
+        return;
+
+    // Evita tamaños absurdos o desbordamientos.
+    constexpr std::size_t MAX_PACKET_SIZE = 4096;
+
+    if (size == 0 || size > MAX_PACKET_SIZE)
+    {
+        Close();
+        return;
+    }
+
     body_.assign(size, 0);
 
     auto self = shared_from_this();
 
-    if (size == 0)
-    {
-        HandlePacket(header_[0], body_);
-        if (state_ != State::Closed)
-            ReadHeader();
-        return;
-    }
-
     boost::asio::async_read(
         *socket_,
-        boost::asio::buffer(body_),
+        boost::asio::buffer(body_.data(), body_.size()),
+
         [self](const boost::system::error_code& error,
-               std::size_t)
+               std::size_t bytesTransferred)
         {
-            if (error)
+            if (error || bytesTransferred != self->body_.size())
             {
                 self->Close();
                 return;
             }
 
             self->HandlePacket(
-                self->header_[0],
+                self->opcode_,
                 self->body_
             );
 
+            // Los handlers deben dejar la sesión abierta si
+            // corresponde continuar leyendo paquetes.
             if (self->state_ != State::Closed)
-                self->ReadHeader();
+            {
+                self->ReadOpcode();
+            }
         }
     );
 }
@@ -117,150 +254,33 @@ void AuthSession::HandlePacket(
     uint8_t opcode,
     const std::vector<uint8_t>& body)
 {
+    if (state_ == State::Closed)
+        return;
+
     switch (opcode)
     {
         case AuthOpcode::LOGON_CHALLENGE:
-            if (state_ != State::WaitingChallenge)
-            {
-                Close();
-                return;
-            }
-
+        {
             HandleLogonChallenge(body);
             break;
+        }
 
         case AuthOpcode::LOGON_PROOF:
-            if (state_ != State::WaitingProof)
-            {
-                Close();
-                return;
-            }
-
+        {
             HandleLogonProof(body);
             break;
+        }
 
         case AuthOpcode::REALM_LIST:
-            if (state_ != State::Authenticated &&
-                state_ != State::WaitingRealmList)
-            {
-                Close();
-                return;
-            }
-
+        {
             HandleRealmList(body);
             break;
+        }
 
         default:
-            std::cerr << "Unknown auth opcode: "
-                      << static_cast<unsigned>(opcode)
-                      << '\n';
-
+        {
             Close();
             break;
-    }
-}
-
-void AuthSession::HandleLogonChallenge(
-    const std::vector<uint8_t>& body)
-{
-    AuthPacketReader reader(body);
-
-    std::array<uint8_t, 4> game{};
-    std::array<uint8_t, 3> version{};
-    std::array<uint8_t, 4> platform{};
-    std::array<uint8_t, 4> os{};
-    std::array<uint8_t, 4> country{};
-
-    uint16_t build = 0;
-    uint32_t timezone = 0;
-    uint32_t clientIP = 0;
-    uint8_t usernameLength = 0;
-
-    if (!reader.ReadBytes(game.data(), game.size()) ||
-        !reader.ReadBytes(version.data(), version.size()) ||
-        !reader.ReadUInt16(build) ||
-        !reader.ReadBytes(platform.data(), platform.size()) ||
-        !reader.ReadBytes(os.data(), os.size()) ||
-        !reader.ReadBytes(country.data(), country.size()) ||
-        !reader.ReadUInt32(timezone) ||
-        !reader.ReadUInt32(clientIP) ||
-        !reader.ReadUInt8(usernameLength))
-    {
-        Close();
-        return;
-    }
-
-    if (usernameLength == 0 ||
-        usernameLength > 32 ||
-        reader.Remaining() != usernameLength)
-    {
-        Close();
-        return;
-    }
-
-    if (std::string(game.begin(), game.end()) !=
-        std::string("\0WoW", 4))
-    {
-        Close();
-        return;
-    }
-
-    if (version[0] != 2 ||
-        version[1] != 4 ||
-        version[2] != 3 ||
-        build != 8606)
-    {
-        std::cerr << "Unsupported client version/build\n";
-        Close();
-        return;
-    }
-
-    if (!reader.ReadString(username_, usernameLength))
-    {
-        Close();
-        return;
-    }
-
-    std::transform(
-        username_.begin(),
-        username_.end(),
-        username_.begin(),
-        [](unsigned char c)
-        {
-            return static_cast<char>(std::toupper(c));
         }
-    );
-
-    clientBuild_ = build;
-
-    std::cout << "Authentication request: "
-              << username_
-              << " | Build: "
-              << clientBuild_
-              << '\n';
-
-    // Next module:
-    // Load salt and verifier from MySQL.
-    // Generate SRP6 challenge B.
-    // Send the challenge response.
-    //
-    // Do not transition to WaitingProof until
-    // the server challenge has been successfully sent.
-
-    Close();
-}
-
-void AuthSession::HandleLogonProof(
-    const std::vector<uint8_t>& body)
-{
-    // Implemented after SRP6 repository integration.
-    Close();
-}
-
-void AuthSession::HandleRealmList(
-    const std::vector<uint8_t>& body)
-{
-    // Implemented after successful authentication
-    // and realm repository integration.
-    Close();
+    }
 }
